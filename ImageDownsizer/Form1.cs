@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Threading;
@@ -11,6 +12,8 @@ namespace ImageDownSizer
     {
         private Image selectedImage;
         private CancellationTokenSource cancellationTokenSource;
+        private Stopwatch parallelSw = new Stopwatch();
+        private Stopwatch sequentialSw = new Stopwatch();
 
         public Form1()
         {
@@ -38,7 +41,7 @@ namespace ImageDownSizer
 
         // Downscales the original image to the specified newWidth and newHeight dimensions
         // The method uses unsafe code to directly manipulate image data for quicker processing
-        public static Bitmap DownscaleImage(Image originalImage, int newWidth, int newHeight, IProgress<int> progress, CancellationToken cancellationToken)
+        public static Bitmap DownscaleImageSequential(Image originalImage, int newWidth, int newHeight, IProgress<int> progress, CancellationToken cancellationToken)
         {
             double widthScaleFactor = (double)newWidth / originalImage.Width;
             double heightScaleFactor = (double)newHeight / originalImage.Height;
@@ -107,17 +110,90 @@ namespace ImageDownSizer
             return newImage;
         }
 
+            // Downscales the original image to the specified newWidth and newHeight dimensions
+            // The method uses unsafe code to directly manipulate image data for quicker processing
+            public static Bitmap DownscaleImage(Image originalImage, int newWidth, int newHeight, IProgress<int> progress, CancellationToken cancellationToken)
+        {
+            double widthScaleFactor = (double)newWidth / originalImage.Width;
+            double heightScaleFactor = (double)newHeight / originalImage.Height;
+
+            Bitmap CreateNewBitmap(int width, int height)
+            {
+                return new Bitmap(width, height, PixelFormat.Format24bppRgb);
+            }
+
+            BitmapData LockBitmapBits(Bitmap bitmap, ImageLockMode lockMode)
+            {
+                return bitmap.LockBits(new Rectangle(0, 0, bitmap.Width, bitmap.Height), lockMode, PixelFormat.Format24bppRgb);
+            }
+
+            Bitmap newImage = CreateNewBitmap(newWidth, newHeight);
+            BitmapData originalData = LockBitmapBits((Bitmap)originalImage, ImageLockMode.ReadOnly);
+            BitmapData newData = LockBitmapBits(newImage, ImageLockMode.WriteOnly);
+
+            unsafe
+            {
+                byte* sourceImageDataPtr = (byte*)originalData.Scan0;
+                byte* newImageDataPtr = (byte*)newData.Scan0;
+
+                int sourceImageStride = originalData.Stride;
+                int newImageStride = newData.Stride;
+
+                int totalPixels = newWidth * newHeight;
+                int processedPixels = 0;
+
+                int rowsPerUpdate = 10;
+                int rowsProcessed = 0;
+
+                Parallel.For(0, newHeight, y =>
+                {
+                    for (int x = 0; x < newWidth; x++)
+                    {
+                        if (cancellationToken.IsCancellationRequested)
+                            return;
+
+                        int originalX = (int)(x / widthScaleFactor);
+                        int originalY = (int)(y / heightScaleFactor);
+
+                        byte* originalPixel = sourceImageDataPtr + originalY * sourceImageStride + originalX * BytesPerPixel;
+                        byte* newPixel = newImageDataPtr + y * newImageStride + x * BytesPerPixel;
+
+                        newPixel[2] = originalPixel[2]; // Red
+                        newPixel[1] = originalPixel[1]; // Green
+                        newPixel[0] = originalPixel[0]; // Blue
+
+                        Interlocked.Increment(ref processedPixels);
+
+                        if (++rowsProcessed >= rowsPerUpdate)
+                        {
+                            int percentComplete = processedPixels * 100 / totalPixels;
+                            progress?.Report(percentComplete);
+                            rowsProcessed = 0;
+                        }
+                    }
+                });
+
+            }
+
+
+            ((Bitmap)originalImage).UnlockBits(originalData);
+            newImage.UnlockBits(newData);
+
+            return newImage;
+        }
+
         private void SetProgressBarValue(int value)
         {
             if (progressBar.InvokeRequired)
             {
                 progressBar.Invoke(new Action<int>(SetProgressBarValue), value);
+                return;
             }
-            else
-            {
-                progressBar.Value = value;
-            }
+
+            progressBar.Value = Math.Max(progressBar.Minimum, Math.Min(progressBar.Maximum, value));
         }
+
+
 
         private void EnableButtons()
         {
@@ -169,8 +245,11 @@ namespace ImageDownSizer
 
             if (cancellationTokenSource != null)
             {
-                cancellationTokenSource.Cancel();
-                cancellationTokenSource.Dispose();
+                if (!cancellationTokenSource.IsCancellationRequested && !cancellationTokenSource.Token.IsCancellationRequested)
+                {
+                    cancellationTokenSource.Cancel();
+                }
+                cancellationTokenSource.Dispose(); // Dispose even if cancellation was requested
             }
 
             cancellationTokenSource = new CancellationTokenSource();
@@ -180,29 +259,42 @@ namespace ImageDownSizer
             {
                 var progress = new Progress<int>(value => SetProgressBarValue(value));
 
-                // Disable buttons during processing
                 DisableButtons();
 
-                Bitmap downscaledImage = await Task.Run(() => DownscaleImage(selectedImage, scaleFactor, progress, cancellationToken), cancellationToken);
+                int newWidth = CalculateNewDimension(selectedImage.Width, scaleFactor, ScaleFactor);
+                int newHeight = CalculateNewDimension(selectedImage.Height, scaleFactor, ScaleFactor);
 
-                if (!cancellationToken.IsCancellationRequested)
-                {
-                    pictureBoxDownsized.Image = downscaledImage;
-                }
+                // Parallel downsizing
+                parallelSw.Restart();
+                Bitmap downscaledImage = await Task.Run(() => DownscaleImage(selectedImage, newWidth, newHeight, progress, cancellationToken), cancellationToken);
+                parallelSw.Stop();
+                labelParallelTime.Text = $"Parallel downsizing took: {parallelSw.ElapsedMilliseconds} ms";
+
+                // Sequential downsizing
+                sequentialSw.Restart();
+                Bitmap downscaledSequentialImage = await Task.Run(() => DownscaleImageSequential(selectedImage, newWidth, newHeight, progress, cancellationToken), cancellationToken);
+                sequentialSw.Stop();
+                labelSequentialTime.Text = $"Sequential downsizing took: {sequentialSw.ElapsedMilliseconds} ms";
+
+                pictureBoxDownsized.Image = downscaledImage;
+                pictureBoxSequential.Image = downscaledSequentialImage;
             }
             catch (OperationCanceledException)
             {
-                // Handle cancellation
                 MessageBox.Show("Image downsizing was canceled.", "Canceled", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             finally
             {
-                // Enable buttons after processing
                 EnableButtons();
-
-                cancellationTokenSource.Dispose();
+                if (cancellationTokenSource != null)
+                {
+                    cancellationTokenSource.Dispose(); // Ensure proper disposal
+                }
             }
         }
+
+
+
 
         //private void Cancel_Click(object sender, EventArgs e)
         //{
@@ -261,5 +353,24 @@ namespace ImageDownSizer
             }
         }
 
+        private void Form1_Load(object sender, EventArgs e)
+        {
+
+        }
+
+        private void labelFactor_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void textBoxFactor_TextChanged(object sender, EventArgs e)
+        {
+
+        }
+
+        private void progressBar_Click(object sender, EventArgs e)
+        {
+
+        }
     }
 }
