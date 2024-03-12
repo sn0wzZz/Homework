@@ -2,7 +2,7 @@
 
 ImageDownsizer is a simple Windows Forms application that allows users to downsize images.
 
-|         |20%      | 50%      |
+|         |25%      | 50%      |
 |--|--|--|
 Sequential| 48286ms | 163600ms |
 Parallel  | 83325ms | 330535ms |
