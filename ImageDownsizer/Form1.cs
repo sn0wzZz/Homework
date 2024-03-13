@@ -18,6 +18,9 @@ namespace ImageDownSizer
         public Form1()
         {
             InitializeComponent();
+            progressBar.Minimum = 0;
+            progressBar.Maximum = 100;
+            progressBar.Value = 0;
         }
 
         private const int ScaleFactor = 100;
@@ -31,12 +34,12 @@ namespace ImageDownSizer
 
         // Downscales the given image based on the specified scaleFactor
         // This method internally calculates the new width and height and sends them to the main method
-        public static Bitmap DownscaleImage(Image originalImage, double scaleFactor, IProgress<int> progress, CancellationToken cancellationToken)
+        public static Bitmap DownscaleImageParallel(Image originalImage, double scaleFactor, IProgress<int> progress, CancellationToken cancellationToken)
         {
             int newWidth = CalculateNewDimension(originalImage.Width, scaleFactor, ScaleFactor);
             int newHeight = CalculateNewDimension(originalImage.Height, scaleFactor, ScaleFactor);
 
-            return DownscaleImage(originalImage, newWidth, newHeight, progress, cancellationToken);
+            return DownscaleImageParallel(originalImage, newWidth, newHeight, progress, cancellationToken);
         }
 
         // Downscales the original image to the specified newWidth and newHeight dimensions
@@ -71,7 +74,7 @@ namespace ImageDownSizer
                 int totalPixels = newWidth * newHeight;
                 int processedPixels = 0;
 
-                int rowsPerUpdate = 10;
+                int rowsPerUpdate = Math.Max(1, newHeight / 100); ;
                 int rowsProcessed = 0;
 
                 for (int y = 0; y < newHeight; y++)
@@ -93,9 +96,10 @@ namespace ImageDownSizer
 
                         processedPixels++;
 
-                        if (++rowsProcessed >= rowsPerUpdate)
+                        // Within the loop:
+                        if (++rowsProcessed >= rowsPerUpdate || y == newHeight - 1)
                         {
-                            int percentComplete = processedPixels * 100 / totalPixels;
+                            int percentComplete = (int)(((double)(y + 1) / newHeight) * 100);
                             progress?.Report(percentComplete);
                             rowsProcessed = 0;
                         }
@@ -103,16 +107,15 @@ namespace ImageDownSizer
                 }
             }
 
-
             ((Bitmap)originalImage).UnlockBits(originalData);
             newImage.UnlockBits(newData);
 
             return newImage;
         }
 
-            // Downscales the original image to the specified newWidth and newHeight dimensions
-            // The method uses unsafe code to directly manipulate image data for quicker processing
-            public static Bitmap DownscaleImage(Image originalImage, int newWidth, int newHeight, IProgress<int> progress, CancellationToken cancellationToken)
+        // Downscales the original image to the specified newWidth and newHeight dimensions
+        // The method uses unsafe code to directly manipulate image data for quicker processing
+        public static Bitmap DownscaleImageParallel(Image originalImage, int newWidth, int newHeight, IProgress<int> progress, CancellationToken cancellationToken)
         {
             double widthScaleFactor = (double)newWidth / originalImage.Width;
             double heightScaleFactor = (double)newHeight / originalImage.Height;
@@ -142,8 +145,10 @@ namespace ImageDownSizer
                 int totalPixels = newWidth * newHeight;
                 int processedPixels = 0;
 
-                int rowsPerUpdate = 10;
+                int rowsPerUpdate = Math.Max(1, newHeight / 100); // Update progress every 1% of rows processed
                 int rowsProcessed = 0;
+
+                int lastReportedProgress = 0; // Track the last reported progress value
 
                 Parallel.For(0, newHeight, y =>
                 {
@@ -162,25 +167,32 @@ namespace ImageDownSizer
                         newPixel[1] = originalPixel[1]; // Green
                         newPixel[0] = originalPixel[0]; // Blue
 
+                        // Update processed pixels count
                         Interlocked.Increment(ref processedPixels);
 
-                        if (++rowsProcessed >= rowsPerUpdate)
+                        if (++rowsProcessed >= rowsPerUpdate || y == newHeight - 1)
                         {
-                            int percentComplete = processedPixels * 100 / totalPixels;
-                            progress?.Report(percentComplete);
+                            int percentComplete = (int)(((double)(y + 1) / newHeight) * 100);
+
+                            // Update progress if it changed significantly
+                            if (percentComplete - lastReportedProgress >= 1)
+                            {
+                                progress?.Report(percentComplete);
+                                lastReportedProgress = percentComplete;
+                            }
+
                             rowsProcessed = 0;
                         }
                     }
                 });
-
             }
 
-
-            ((Bitmap)originalImage).UnlockBits(originalData);
+    ((Bitmap)originalImage).UnlockBits(originalData);
             newImage.UnlockBits(newData);
 
             return newImage;
         }
+
 
         private void SetProgressBarValue(int value)
         {
@@ -193,39 +205,30 @@ namespace ImageDownSizer
             progressBar.Value = Math.Max(progressBar.Minimum, Math.Min(progressBar.Maximum, value));
         }
 
-
-
         private void EnableButtons()
         {
-            //if (buttonCancel.InvokeRequired || buttonSave.InvokeRequired)
             if (buttonSave.InvokeRequired)
             {
-                //buttonCancel.Invoke(new Action(EnableButtons));
                 buttonSave.Invoke(new Action(EnableButtons));
             }
             else
             {
-                //buttonCancel.Enabled = true;
                 buttonSave.Enabled = true;
             }
         }
 
         private void DisableButtons()
         {
-            //if (buttonCancel.InvokeRequired || buttonSave.InvokeRequired)
             if (buttonSave.InvokeRequired)
             {
-                //buttonCancel.Invoke(new Action(DisableButtons));
                 buttonSave.Invoke(new Action(DisableButtons));
             }
             else
             {
-                //buttonCancel.Enabled = false;
                 buttonSave.Enabled = false;
             }
         }
 
-        // Performs checks before it tries to downscale the image, initiates the progres bar
         private async void DownsizeImage_Click(object sender, EventArgs e)
         {
             if (selectedImage == null)
@@ -243,15 +246,6 @@ namespace ImageDownSizer
                 return;
             }
 
-            if (cancellationTokenSource != null)
-            {
-                if (!cancellationTokenSource.IsCancellationRequested && !cancellationTokenSource.Token.IsCancellationRequested)
-                {
-                    cancellationTokenSource.Cancel();
-                }
-                cancellationTokenSource.Dispose(); // Dispose even if cancellation was requested
-            }
-
             cancellationTokenSource = new CancellationTokenSource();
             var cancellationToken = cancellationTokenSource.Token;
 
@@ -266,7 +260,7 @@ namespace ImageDownSizer
 
                 // Parallel downsizing
                 parallelSw.Restart();
-                Bitmap downscaledImage = await Task.Run(() => DownscaleImage(selectedImage, newWidth, newHeight, progress, cancellationToken), cancellationToken);
+                Bitmap downscaledImage = await Task.Run(() => DownscaleImageParallel(selectedImage, newWidth, newHeight, progress, cancellationToken), cancellationToken);
                 parallelSw.Stop();
                 labelParallelTime.Text = $"Parallel downsizing took: {parallelSw.ElapsedMilliseconds} ms";
 
@@ -293,18 +287,6 @@ namespace ImageDownSizer
             }
         }
 
-
-
-
-        //private void Cancel_Click(object sender, EventArgs e)
-        //{
-        //    if (cancellationTokenSource != null && !cancellationTokenSource.Token.IsCancellationRequested)
-        //    {
-        //        cancellationTokenSource.Cancel();
-        //    }
-        //}
-
-        // Opens images in various formats
         private void OpenImage_Click(object sender, EventArgs e)
         {
             OpenFileDialog openFileDialog = new OpenFileDialog();
@@ -316,7 +298,7 @@ namespace ImageDownSizer
                 pictureBoxOriginal.Image = selectedImage;
             }
         }
-        // Downloads/Saves images in various fromats
+
         private void DownloadImage_Click(object sender, EventArgs e)
         {
             if (pictureBoxDownsized.Image != null)
@@ -351,26 +333,6 @@ namespace ImageDownSizer
             {
                 MessageBox.Show("Please downsize an image first.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
-        }
-
-        private void Form1_Load(object sender, EventArgs e)
-        {
-
-        }
-
-        private void labelFactor_Click(object sender, EventArgs e)
-        {
-
-        }
-
-        private void textBoxFactor_TextChanged(object sender, EventArgs e)
-        {
-
-        }
-
-        private void progressBar_Click(object sender, EventArgs e)
-        {
-
         }
     }
 }
