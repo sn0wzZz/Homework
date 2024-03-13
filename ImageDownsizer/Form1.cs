@@ -145,10 +145,10 @@ namespace ImageDownSizer
                 int totalPixels = newWidth * newHeight;
                 int processedPixels = 0;
 
-                int rowsPerUpdate = Math.Max(1, newHeight / 100); // Update progress every 1% of rows processed
+                int rowsPerUpdate = Math.Max(1, newHeight / 100); 
                 int rowsProcessed = 0;
 
-                int lastReportedProgress = 0; // Track the last reported progress value
+                int lastReportedProgress = 0; 
 
                 Parallel.For(0, newHeight, y =>
                 {
@@ -282,7 +282,7 @@ namespace ImageDownSizer
                 EnableButtons();
                 if (cancellationTokenSource != null)
                 {
-                    cancellationTokenSource.Dispose(); // Ensure proper disposal
+                    cancellationTokenSource.Dispose();
                 }
             }
         }
