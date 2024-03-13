@@ -4,7 +4,7 @@ ImageDownsizer is a simple Windows Forms application that allows users to downsi
 
 |         |10%      | 50%      | 80%|
 |--|--|--|--|
-Sequential| 3845ms | 18041ms | 30331ma|
-Parallel  | 142ms | 2378ms | 11560ms|
+Sequential| 3 845ms | 18 041ms | 30 331ma|
+Parallel  | 1 42ms | 2 378ms | 11 560ms|
 
 Times masured from the application when testing with AG1121.jpg... As expected the parallel downsizing is quicker.
