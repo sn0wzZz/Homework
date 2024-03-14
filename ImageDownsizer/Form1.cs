@@ -113,85 +113,103 @@ namespace ImageDownSizer
             return newImage;
         }
 
-        // Downscales the original image to the specified newWidth and newHeight dimensions
-        // The method uses unsafe code to directly manipulate image data for quicker processing
+        // This method takes the original image, new width, new height, progress reporter, and cancellation token
+        // It creates a new bitmap with the specified dimensions for the downscaled image
+        // The method divides the image into sections based on the number of CPU cores available
+        // For each section, it creates a thread to process that section of the image
+        // Each thread calls the ProcessImageSection method to perform the downsizing
+        // After all threads finish processing, the method returns the downscaled image
         public static Bitmap DownscaleImageParallel(Image originalImage, int newWidth, int newHeight, IProgress<int> progress, CancellationToken cancellationToken)
         {
-            double widthScaleFactor = (double)newWidth / originalImage.Width;
-            double heightScaleFactor = (double)newHeight / originalImage.Height;
+            // Make a local copy of image dimensions
+            int originalWidth = originalImage.Width;
+            int originalHeight = originalImage.Height;
 
-            Bitmap CreateNewBitmap(int width, int height)
-            {
-                return new Bitmap(width, height, PixelFormat.Format24bppRgb);
-            }
+            double widthScaleFactor = (double)newWidth / originalWidth;
+            double heightScaleFactor = (double)newHeight / originalHeight;
 
-            BitmapData LockBitmapBits(Bitmap bitmap, ImageLockMode lockMode)
-            {
-                return bitmap.LockBits(new Rectangle(0, 0, bitmap.Width, bitmap.Height), lockMode, PixelFormat.Format24bppRgb);
-            }
-
-            Bitmap newImage = CreateNewBitmap(newWidth, newHeight);
-            BitmapData originalData = LockBitmapBits((Bitmap)originalImage, ImageLockMode.ReadOnly);
-            BitmapData newData = LockBitmapBits(newImage, ImageLockMode.WriteOnly);
+            Bitmap newImage = new Bitmap(newWidth, newHeight, PixelFormat.Format24bppRgb);
 
             unsafe
             {
-                byte* sourceImageDataPtr = (byte*)originalData.Scan0;
-                byte* newImageDataPtr = (byte*)newData.Scan0;
+                BitmapData originalData = ((Bitmap)originalImage).LockBits(new Rectangle(0, 0, originalWidth, originalHeight), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+                BitmapData newData = newImage.LockBits(new Rectangle(0, 0, newWidth, newHeight), ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
 
-                int sourceImageStride = originalData.Stride;
-                int newImageStride = newData.Stride;
-
-                int totalPixels = newWidth * newHeight;
-                int processedPixels = 0;
-
-                int rowsPerUpdate = Math.Max(1, newHeight / 100); 
-                int rowsProcessed = 0;
-
-                int lastReportedProgress = 0; 
-
-                Parallel.For(0, newHeight, y =>
+                try
                 {
-                    for (int x = 0; x < newWidth; x++)
+                    byte* sourceImageDataPtr = (byte*)originalData.Scan0;
+                    byte* newImageDataPtr = (byte*)newData.Scan0;
+
+                    int sourceImageStride = originalData.Stride;
+                    int newImageStride = newData.Stride;
+
+                    int numThreads = Environment.ProcessorCount; // Get the number of CPU cores
+
+                    List<Thread> threads = new List<Thread>();
+
+                    // Divide the image into equal sections for each thread
+                    int sectionHeight = newHeight / numThreads;
+
+                    for (int i = 0; i < numThreads; i++)
                     {
-                        if (cancellationToken.IsCancellationRequested)
-                            return;
+                        int startY = i * sectionHeight;
+                        int endY = (i == numThreads - 1) ? newHeight : startY + sectionHeight;
 
-                        int originalX = (int)(x / widthScaleFactor);
-                        int originalY = (int)(y / heightScaleFactor);
-
-                        byte* originalPixel = sourceImageDataPtr + originalY * sourceImageStride + originalX * BytesPerPixel;
-                        byte* newPixel = newImageDataPtr + y * newImageStride + x * BytesPerPixel;
-
-                        newPixel[2] = originalPixel[2]; // Red
-                        newPixel[1] = originalPixel[1]; // Green
-                        newPixel[0] = originalPixel[0]; // Blue
-
-                        // Update processed pixels count
-                        Interlocked.Increment(ref processedPixels);
-
-                        if (++rowsProcessed >= rowsPerUpdate || y == newHeight - 1)
+                        Thread thread = new Thread(() =>
                         {
-                            int percentComplete = (int)(((double)(y + 1) / newHeight) * 100);
+                            ProcessImageSection(startY, endY, newWidth, widthScaleFactor, heightScaleFactor, sourceImageDataPtr, newImageDataPtr, sourceImageStride, newImageStride, cancellationToken, progress);
+                        });
 
-                            // Update progress if it changed significantly
-                            if (percentComplete - lastReportedProgress >= 1)
-                            {
-                                progress?.Report(percentComplete);
-                                lastReportedProgress = percentComplete;
-                            }
-
-                            rowsProcessed = 0;
-                        }
+                        thread.Start();
+                        threads.Add(thread);
                     }
-                });
-            }
 
-    ((Bitmap)originalImage).UnlockBits(originalData);
-            newImage.UnlockBits(newData);
+                    // Wait for all threads to finish
+                    foreach (Thread thread in threads)
+                    {
+                        thread.Join();
+                    }
+                }
+                finally
+                {
+                    ((Bitmap)originalImage).UnlockBits(originalData);
+                    newImage.UnlockBits(newData);
+                }
+            }
 
             return newImage;
         }
+
+        // This method is called by each thread to process a specific section of the image
+        // It iterates over the pixels within the specified section and calculates the corresponding pixels in the original image
+        // The pixel values are copied from the original image to the new downscaled image
+        private unsafe static void ProcessImageSection(int startY, int endY, int newWidth, double widthScaleFactor, double heightScaleFactor,
+    byte* sourceImageDataPtr, byte* newImageDataPtr, int sourceImageStride, int newImageStride, CancellationToken cancellationToken, IProgress<int> progress)
+        {
+            for (int y = startY; y < endY; y++)
+            {
+                for (int x = 0; x < newWidth; x++)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
+
+                    int originalX = (int)(x / widthScaleFactor);
+                    int originalY = (int)(y / heightScaleFactor);
+
+                    byte* originalPixel = sourceImageDataPtr + originalY * sourceImageStride + originalX * 3;
+                    byte* newPixel = newImageDataPtr + y * newImageStride + x * 3;
+
+                    newPixel[2] = originalPixel[2]; // Red
+                    newPixel[1] = originalPixel[1]; // Green
+                    newPixel[0] = originalPixel[0]; // Blue
+                }
+
+                // Report progress
+                int progressValue = (int)(((double)(y + 1) / (endY - startY)) * 100);
+                progress?.Report(progressValue);
+            }
+        }
+
 
 
         private void SetProgressBarValue(int value)
@@ -299,6 +317,15 @@ namespace ImageDownSizer
             }
         }
 
+        //private void Cancel_Click(object sender, EventArgs e)
+        //{
+        //    if (cancellationTokenSource != null)
+        //    {
+        //        cancellationTokenSource.Cancel();
+        //    }
+        //}
+
+
         private void DownloadImage_Click(object sender, EventArgs e)
         {
             if (pictureBoxDownsized.Image != null)
@@ -311,7 +338,7 @@ namespace ImageDownSizer
                 if (saveFileDialog.FileName != "")
                 {
                     // Get the image format based on the selected file type
-                    ImageFormat imageFormat = ImageFormat.Jpeg; // Default to JPEG
+                    ImageFormat imageFormat = ImageFormat.Jpeg;
                     switch (saveFileDialog.FilterIndex)
                     {
                         case 2:
@@ -322,10 +349,7 @@ namespace ImageDownSizer
                             break;
                     }
 
-                    // Save the downsized image
                     pictureBoxDownsized.Image.Save(saveFileDialog.FileName, imageFormat);
-
-                    // Show success notification
                     MessageBox.Show("Image successfully saved!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }

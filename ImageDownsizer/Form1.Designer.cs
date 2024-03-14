@@ -39,6 +39,7 @@
             this.pictureBoxSequential = new System.Windows.Forms.PictureBox();
             this.labelParallelTime = new System.Windows.Forms.Label();
             this.labelSequentialTime = new System.Windows.Forms.Label();
+            //this.buttonCancel = new System.Windows.Forms.Button();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBoxOriginal)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBoxDownsized)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBoxSequential)).BeginInit();
@@ -127,6 +128,17 @@
             this.buttonSave.UseVisualStyleBackColor = true;
             this.buttonSave.Click += new System.EventHandler(this.DownloadImage_Click);
             // 
+            // buttonCancel
+            // 
+            //this.buttonCancel.Location = new System.Drawing.Point(1447, 474);
+            //this.buttonCancel.Margin = new System.Windows.Forms.Padding(5, 6, 5, 6);
+            //this.buttonCancel.Name = "buttonCancel";
+            //this.buttonCancel.Size = new System.Drawing.Size(162, 56);
+            //this.buttonCancel.TabIndex = 12;
+            //this.buttonCancel.Text = "Cancel";
+            //this.buttonCancel.UseVisualStyleBackColor = true;
+            //this.buttonCancel.Click += new System.EventHandler(this.Cancel_Click);
+            // 
             // pictureBoxSequential
             // 
             this.pictureBoxSequential.BackColor = System.Drawing.Color.LightGray;
@@ -165,6 +177,7 @@
             this.BackColor = System.Drawing.Color.DimGray;
             this.BackgroundImageLayout = System.Windows.Forms.ImageLayout.Center;
             this.ClientSize = new System.Drawing.Size(1787, 546);
+            //this.Controls.Add(this.buttonCancel);
             this.Controls.Add(this.labelSequentialTime);
             this.Controls.Add(this.labelParallelTime);
             this.Controls.Add(this.pictureBoxSequential);
